@@ -2,18 +2,20 @@ package login
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/thrisp/flotilla"
 )
 
 type (
 	LoginManager struct {
-		ctx              *flotilla.Ctx
-		App              *flotilla.App
-		defaultconfig    map[string]string
-		UserLoader       func(string) User
-		UnauthorizedCall flotilla.HandlerFunc
+		ctx                 *flotilla.Ctx
+		App                 *flotilla.App
+		defaultconfig       map[string]string
+		UserLoader          func(string) User
+		UnauthorizedHandler flotilla.HandlerFunc
 	}
 )
 
@@ -30,77 +32,36 @@ func loginctxfuncs(l *LoginManager) map[string]interface{} {
 func defaultconfig() map[string]string {
 	ret := make(map[string]string)
 	ret["COOKIE_NAME"] = "remember_token"
+	ret["COOKIE_DURATION"] = "31"
 	ret["MESSAGE_CATEGORY"] = "message"
 	ret["REFRESH_MESSAGE"] = "Please reauthenticate to access this page."
 	ret["UNAUTHORIZED_MESSAGE"] = "Please log in to access this page"
 	return ret
 }
 
-// RequireLogin is a flotilla HandlerFunc that checks for authorized user,
-// aborting with 401 if unauthorized.
-func RequireLogin(c *flotilla.Ctx) {
-	l, _ := c.Call("loginmanager", c)
-	m := l.(*LoginManager)
-	currentuser := m.Currentuser()
-	if !currentuser.IsAuthenticated() {
-		m.unauthorized()
-	}
-}
-
-// LoginRequired wraps a flotilla HandlerFunc to ensure that the current
-// user is logged in and authenticated before calling the handlerfunc.
-func LoginRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
-	return func(c *flotilla.Ctx) {
-		l, _ := c.Call("loginmanager", c)
-		m := l.(*LoginManager)
-		currentuser := m.Currentuser()
-		if currentuser.IsAuthenticated() {
-			h(c)
-		} else {
-			m.unauthorized()
-		}
-	}
-}
-
-//func RefreshRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
-//return func(c *flotilla.Ctx) {
-//l, _ := c.Call("loginmanager", c)
-//m := l.(*LoginManager)
-//currentuser := m.Currentuser()
-//	if currentuser.IsAuthenticated() {
-//		if rv, ok := l.Views["refresh"]; ok {
-//        // flash refresh message
-//        // set next as current url
-//        c.Redirect(303, rv)
-//      } else {
-//        c.Status(403)
-//      }
-//	} else {
-//		m.unauthorized()
-//	}
-//}
-//}
-
 func (l *LoginManager) Init(app *flotilla.App) {
 	l.App = app
+	// add ctxprocessor to access current_user in template
 	app.Configuration = append(app.Configuration, flotilla.CtxFuncs(loginctxfuncs(l)))
+	app.Use(l.updateremembered)
 }
 
 func (l *LoginManager) Reload(c *flotilla.Ctx) {
 	l.ctx = c
 	if uid := l.ctx.Session.Get("user_id"); uid == nil {
-		//fmt.Printf("%+v\n", l.ctx.Session.Get("user_id"))
 		l.loadremembered()
-		//fmt.Printf("%+v\n", l.ctx.ReadCookies())
 	}
 }
 
-func (l *LoginManager) configordefault(key string) string {
-	k := strings.ToUpper(key)
-	//if item, ok := l.ctx.App.Env.Store[k]; ok {
+func storekey(key string) string {
+	return fmt.Sprintf("LOGIN_%s", strings.ToUpper(key))
+}
+
+func (l *LoginManager) config(key string) string {
+	//if item, ok := l.ctx.App.Env.Store[storekey(key))]; ok {
 	//	return item.Value
 	//}
-	if item, ok := l.defaultconfig[k]; ok {
+	if item, ok := l.defaultconfig[strings.ToUpper(key)]; ok {
 		return item
 	}
 	return ""
@@ -114,11 +75,11 @@ func (l *LoginManager) currentuserid() string {
 	return ""
 }
 
-func (l *LoginManager) Currentuser() User {
+func (l *LoginManager) CurrentUser() User {
 	return l.getuser()
 }
 
-func (l *LoginManager) Loginuser(user User, remember bool) bool {
+func (l *LoginManager) LoginUser(user User, remember bool) bool {
 	if !user.IsActive() {
 		return false
 	}
@@ -131,7 +92,7 @@ func (l *LoginManager) Loginuser(user User, remember bool) bool {
 	return true
 }
 
-func (l *LoginManager) Logoutuser() bool {
+func (l *LoginManager) LogoutUser() bool {
 	l.unloaduser()
 	return true
 }
@@ -163,11 +124,11 @@ func (l *LoginManager) unloaduser() {
 }
 
 func (l *LoginManager) unauthorized() error {
-	if l.UnauthorizedCall != nil {
-		l.UnauthorizedCall(l.ctx)
+	if l.UnauthorizedHandler != nil {
+		l.UnauthorizedHandler(l.ctx)
 	}
-	l.ctx.Flash(l.configordefault("unauthorized_message"), l.configordefault("message_category"))
-	if lv := l.configordefault("login_url"); lv != "" {
+	l.ctx.Flash(l.config("message_category"), l.config("unauthorized_message"))
+	if lv := l.config("login_url"); lv != "" {
 		l.ctx.Redirect(401, lv)
 	} else {
 		l.ctx.Status(401)
@@ -175,21 +136,74 @@ func (l *LoginManager) unauthorized() error {
 	return nil
 }
 
-func (l *LoginManager) setremembered(c *flotilla.Ctx) {
+func (l *LoginManager) updateremembered(c *flotilla.Ctx) {
+	c.Next()
 	if remember := c.Session.Get("remember"); remember != nil {
 		switch remember.(string) {
 		case "set":
-			fmt.Printf("set remember cookie\n")
+			l.setremembered()
 		case "clear":
-			fmt.Printf("clear remember cookie\n")
+			l.clearremembered()
 		}
+		c.Session.Delete("remember")
 	}
 }
 
 func (l *LoginManager) loadremembered() {
-	cookiename := l.configordefault("COOKIE_NAME")
-	if x, ok := l.ctx.ReadCookies()[cookiename]; ok {
+	if x, ok := l.ctx.ReadCookies()[l.config("COOKIE_NAME")]; ok {
 		fmt.Printf("remember_cookie: %+v\n", x)
+		//update session user_id from remember_token
 		l.ctx.Session.Set("_fresh", false)
 	}
 }
+
+func cookieseconds(d string) int {
+	base, err := strconv.Atoi(d)
+	if err != nil {
+		base = 31
+	}
+	return int((time.Duration(base*24) * time.Hour) / time.Second)
+}
+
+func (l *LoginManager) setremembered() {
+	cookiename := l.config("COOKIE_NAME")
+	cookievalue := l.ctx.Session.Get("user_id").(string)
+	cookieduration := cookieseconds(l.config("COOKIE_DURATION"))
+	l.ctx.SecureCookie(cookiename, cookievalue, cookieduration)
+	//fmt.Printf("set remember cookie: %s %s %d\n", cookiename, cookievalue, cookieduration)
+}
+
+func (l *LoginManager) clearremembered() {
+	cookiename := l.config("COOKIE_NAME")
+	cookievalue := ""
+	l.ctx.SecureCookie(cookiename, cookievalue, 0)
+	//fmt.Printf("clear remember cookie\n")
+}
+
+// RequireLogin is a flotilla HandlerFunc that checks for authorized user,
+// aborting with 401 if unauthorized.
+func RequireLogin(c *flotilla.Ctx) {
+	l, _ := c.Call("loginmanager", c)
+	m := l.(*LoginManager)
+	currentuser := m.CurrentUser()
+	if !currentuser.IsAuthenticated() {
+		m.unauthorized()
+	}
+}
+
+// LoginRequired wraps a flotilla HandlerFunc to ensure that the current
+// user is logged in and authenticated before calling the handlerfunc.
+func LoginRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
+	return func(c *flotilla.Ctx) {
+		l, _ := c.Call("loginmanager", c)
+		m := l.(*LoginManager)
+		if m.CurrentUser().IsAuthenticated() {
+			h(c)
+		} else {
+			m.unauthorized()
+		}
+	}
+}
+
+//func RefreshRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
+//	return func(c *flotilla.Ctx) {}
