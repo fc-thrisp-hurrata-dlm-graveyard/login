@@ -46,9 +46,9 @@ func PerformRequest(r http.Handler, method, path string) *httptest.ResponseRecor
 	return w
 }
 
-func basemanager() *LoginManager {
-	l := New()
-	l.UserLoader = InMemoryUserLoader
+func basemanager(c ...Configuration) *LoginManager {
+	c = append(c, UserLoader(InMemoryUserLoader))
+	l := New(c...)
 	return l
 }
 
@@ -76,6 +76,7 @@ func TestExtension(t *testing.T) {
 		if _, ok := l.(*LoginManager); ok {
 			exists = true
 		}
+		c.ServeData(200, []byte("success"))
 	})
 	PerformRequest(f, "GET", "/test")
 	if !exists {
@@ -109,10 +110,11 @@ func TestLogin(t *testing.T) {
 		l, _ := c.Call("loginmanager", c)
 		m := l.(*LoginManager)
 		u := tusers["one"]
-		m.LoginUser(u, true)
+		m.LoginUser(u, true, true)
 		if id := m.CurrentUser().GetId(); id == u.username {
 			loggedin = true
 		}
+		c.ServeData(200, []byte("success"))
 	})
 	PerformRequest(f, "POST", "/login")
 	if !loggedin {
@@ -127,11 +129,12 @@ func TestLogout(t *testing.T) {
 		l, _ := c.Call("loginmanager", c)
 		m := l.(*LoginManager)
 		u := tusers["one"]
-		m.LoginUser(u, false)
+		m.LoginUser(u, false, false)
 		m.LogoutUser()
 		if id := m.CurrentUser().GetId(); id == u.username {
 			loggedin = true
 		}
+		c.ServeData(200, []byte("success"))
 	})
 	PerformRequest(f, "POST", "/logout")
 	if loggedin {
@@ -139,6 +142,7 @@ func TestLogout(t *testing.T) {
 	}
 }
 
+/*
 func TestRefresh(t *testing.T) {
 	refreshed := false
 	f := testapp("test-refresh", basemanager())
@@ -146,8 +150,9 @@ func TestRefresh(t *testing.T) {
 		l, _ := c.Call("loginmanager", c)
 		m := l.(*LoginManager)
 		u := tusers["one"]
-		m.LoginUser(u, false)
+		m.LoginUser(u, false, true)
 		refreshed = c.Session.Get("_fresh").(bool)
+		c.ServeData(200, []byte("success"))
 	})
 	PerformRequest(f, "GET", "/refresh")
 	if !refreshed {
@@ -155,29 +160,23 @@ func TestRefresh(t *testing.T) {
 	}
 }
 
-/*
-func TestRefreshRequired() {}
+//func TestRefreshRequired() {}
 
-func rememfunc(r bool) flotilla.HandlerFunc {
-	return func(c *flotilla.Ctx) {
+func TestRemembered(t *testing.T) {
+	w := httptest.NewRecorder()
+	f := testapp("test-remember", basemanager())
+	f.GET("/remembered", func(c *flotilla.Ctx) {
 		l, _ := c.Call("loginmanager", c)
 		m := l.(*LoginManager)
 		u := tusers["one"]
-		m.LoginUser(u, r)
-		m.loadremembered()
-	}
-}
-
-func TestRemember(t *testing.T) {
-	f := testapp("test-remember", basemanager())
-	f.GET("/remember", rememfunc(true))
-	req, _ := http.NewRequest("GET", "/remember", nil)
-	w := httptest.NewRecorder()
+		m.LoginUser(u, true, true)
+		c.ServeData(200, []byte("success"))
+	})
+	req, _ := http.NewRequest("GET", "/remembered", nil)
 	f.ServeHTTP(w, req)
-	//a := PerformRequest(f, "GET", "/remember")
-	//if _, ok := a.HeaderMap["Set-Cookie"]["remember_token"]; !ok {
-	//	t.Errorf("remember cookie WAS NOT set")
-	//}
-	fmt.Printf("%+v\n\n", w)
+	for _, x := range w.Header()["Set-Cookie"] {
+		fmt.Printf("%s\n", x)
+	}
+	fmt.Printf("1: %+v\n\n", reflect.TypeOf(w.Header()["Set-Cookie"]))
 }
 */

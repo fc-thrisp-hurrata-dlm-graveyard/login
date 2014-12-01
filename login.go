@@ -2,40 +2,49 @@ package login
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/thrisp/flotilla"
+	"github.com/thrisp/flotilla/session"
 )
 
 type (
 	LoginManager struct {
-		ctx                 *flotilla.Ctx
-		App                 *flotilla.App
-		defaultconfig       map[string]string
-		UserLoader          func(string) User
-		UnauthorizedHandler flotilla.HandlerFunc
+		s          session.SessionStore
+		App        *flotilla.App
+		Env        map[string]string
+		userloader func(string) User
+		Handlers   map[string]flotilla.HandlerFunc
 	}
 )
 
-func New() *LoginManager {
-	return &LoginManager{defaultconfig: defaultconfig()}
+var (
+	defaultenv map[string]string = map[string]string{
+		"COOKIE_NAME":          "remember_token",
+		"COOKIE_DURATION":      "31",
+		"COOKIE_PATH":          "/",
+		"MESSAGE_CATEGORY":     "message",
+		"REFERESH_MESSAGE":     "Please reauthenticate to access this page.",
+		"UNAUTHORIZED_MESSAGE": "Please log in to access this page",
+	}
+
+	defaulthandlers map[string]flotilla.HandlerFunc
+)
+
+func New(c ...Configuration) *LoginManager {
+	l := &LoginManager{Env: defaultenv,
+		Handlers: defaulthandlers}
+	err := l.Configuration(c...)
+	if err != nil {
+		panic(fmt.Sprintf("[FLOTILLA-LOGIN] configuration error: %s", err))
+	}
+	return l
 }
 
 func loginctxfuncs(l *LoginManager) map[string]interface{} {
 	ret := make(map[string]interface{})
 	ret["loginmanager"] = func(c *flotilla.Ctx) *LoginManager { l.Reload(c); return l }
-	return ret
-}
-
-func defaultconfig() map[string]string {
-	ret := make(map[string]string)
-	ret["COOKIE_NAME"] = "remember_token"
-	ret["COOKIE_DURATION"] = "31"
-	ret["MESSAGE_CATEGORY"] = "message"
-	ret["REFRESH_MESSAGE"] = "Please reauthenticate to access this page."
-	ret["UNAUTHORIZED_MESSAGE"] = "Please log in to access this page"
+	ret["currentuser"] = func() error { fmt.Printf("return current user"); return nil }
 	return ret
 }
 
@@ -47,28 +56,24 @@ func (l *LoginManager) Init(app *flotilla.App) {
 }
 
 func (l *LoginManager) Reload(c *flotilla.Ctx) {
-	l.ctx = c
-	if uid := l.ctx.Session.Get("user_id"); uid == nil {
-		l.loadremembered()
+	l.s = c.Session
+	if uid := l.s.Get("user_id"); uid == nil {
+		l.loadremembered(c)
 	}
 }
 
-func storekey(key string) string {
-	return fmt.Sprintf("LOGIN_%s", strings.ToUpper(key))
-}
-
-func (l *LoginManager) config(key string) string {
-	//if item, ok := l.ctx.App.Env.Store[storekey(key))]; ok {
-	//	return item.Value
-	//}
-	if item, ok := l.defaultconfig[strings.ToUpper(key)]; ok {
+func (l *LoginManager) env(key string) string {
+	if item, ok := l.App.Env.Store[storekey(key)]; ok {
+		return item.Value
+	}
+	if item, ok := l.Env[strings.ToUpper(key)]; ok {
 		return item
 	}
 	return ""
 }
 
 func (l *LoginManager) currentuserid() string {
-	uid := l.ctx.Session.Get("user_id")
+	uid := l.s.Get("user_id")
 	if uid != nil {
 		return uid.(string)
 	}
@@ -76,108 +81,64 @@ func (l *LoginManager) currentuserid() string {
 }
 
 func (l *LoginManager) CurrentUser() User {
-	return l.getuser()
+	if usr := l.s.Get("user"); usr == nil {
+		l.reloaduser()
+	}
+	user := l.s.Get("user")
+	return user.(User)
 }
 
-func (l *LoginManager) LoginUser(user User, remember bool) bool {
+func (l *LoginManager) LoginUser(user User, remember bool, fresh bool) bool {
 	if !user.IsActive() {
 		return false
 	}
-	l.ctx.Session.Set("user_id", user.GetId())
-	l.ctx.Session.Set("_fresh", true)
+	l.s.Set("user_id", user.GetId())
 	if remember {
-		l.ctx.Session.Set("remember", "set")
+		l.s.Set("remember", "set")
 	}
-	l.ctx.Set("user", user)
+	l.s.Set("_fresh", fresh)
+	l.s.Set("user", user)
 	return true
 }
 
 func (l *LoginManager) LogoutUser() bool {
+	l.s.Set("_test", "from LoGoUtUsEr FUNCTION")
 	l.unloaduser()
 	return true
 }
 
-func (l *LoginManager) getuser() User {
-	if l.ctx != nil {
-		if _, ok := l.ctx.Data["user"]; !ok {
-			l.loaduser()
-		}
-		user, _ := l.ctx.Get("user")
-		return user.(User)
+func (l *LoginManager) UserLoader(userid string) User {
+	if u := l.userloader; u != nil {
+		return u(userid)
 	}
-	return nil
+	return &AnonymousUser{}
 }
 
-func (l *LoginManager) loaduser() {
-	l.reloaduser(l.currentuserid())
+func (l *LoginManager) reloaduser() {
+	l.loaduser(l.currentuserid())
 }
 
-func (l *LoginManager) reloaduser(userid string) {
-	l.ctx.Set("user", l.UserLoader(userid))
+func (l *LoginManager) loaduser(userid string) {
+	l.s.Set("user", l.UserLoader(userid))
 }
 
 func (l *LoginManager) unloaduser() {
-	l.ctx.Set("user", nil)
-	l.ctx.Session.Delete("user_id")
-	l.ctx.Session.Set("remember", "clear")
-	l.loaduser()
+	l.s.Delete("user")
+	l.s.Delete("user_id")
+	l.s.Set("remember", "clear")
+	l.reloaduser()
 }
 
-func (l *LoginManager) unauthorized() error {
-	if l.UnauthorizedHandler != nil {
-		l.UnauthorizedHandler(l.ctx)
+func (l *LoginManager) Unauthorized(c *flotilla.Ctx) {
+	if h := l.Handlers["unauthorized"]; h != nil {
+		h(c)
 	}
-	l.ctx.Flash(l.config("message_category"), l.config("unauthorized_message"))
-	if lv := l.config("login_url"); lv != "" {
-		l.ctx.Redirect(401, lv)
+	c.Flash(l.env("message_category"), l.env("unauthorized_message"))
+	if lv := l.env("login_url"); lv != "" {
+		c.Redirect(401, lv)
 	} else {
-		l.ctx.Status(401)
+		c.Status(401)
 	}
-	return nil
-}
-
-func (l *LoginManager) updateremembered(c *flotilla.Ctx) {
-	c.Next()
-	if remember := c.Session.Get("remember"); remember != nil {
-		switch remember.(string) {
-		case "set":
-			l.setremembered()
-		case "clear":
-			l.clearremembered()
-		}
-		c.Session.Delete("remember")
-	}
-}
-
-func (l *LoginManager) loadremembered() {
-	if x, ok := l.ctx.ReadCookies()[l.config("COOKIE_NAME")]; ok {
-		fmt.Printf("remember_cookie: %+v\n", x)
-		//update session user_id from remember_token
-		l.ctx.Session.Set("_fresh", false)
-	}
-}
-
-func cookieseconds(d string) int {
-	base, err := strconv.Atoi(d)
-	if err != nil {
-		base = 31
-	}
-	return int((time.Duration(base*24) * time.Hour) / time.Second)
-}
-
-func (l *LoginManager) setremembered() {
-	cookiename := l.config("COOKIE_NAME")
-	cookievalue := l.ctx.Session.Get("user_id").(string)
-	cookieduration := cookieseconds(l.config("COOKIE_DURATION"))
-	l.ctx.SecureCookie(cookiename, cookievalue, cookieduration)
-	//fmt.Printf("set remember cookie: %s %s %d\n", cookiename, cookievalue, cookieduration)
-}
-
-func (l *LoginManager) clearremembered() {
-	cookiename := l.config("COOKIE_NAME")
-	cookievalue := ""
-	l.ctx.SecureCookie(cookiename, cookievalue, 0)
-	//fmt.Printf("clear remember cookie\n")
 }
 
 // RequireLogin is a flotilla HandlerFunc that checks for authorized user,
@@ -187,7 +148,7 @@ func RequireLogin(c *flotilla.Ctx) {
 	m := l.(*LoginManager)
 	currentuser := m.CurrentUser()
 	if !currentuser.IsAuthenticated() {
-		m.unauthorized()
+		m.Unauthorized(c)
 	}
 }
 
@@ -200,10 +161,46 @@ func LoginRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
 		if m.CurrentUser().IsAuthenticated() {
 			h(c)
 		} else {
-			m.unauthorized()
+			m.Unauthorized(c)
 		}
 	}
 }
 
 //func RefreshRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
 //	return func(c *flotilla.Ctx) {}
+
+func (l *LoginManager) updateremembered(c *flotilla.Ctx) {
+	c.Next()
+	if remember := c.Session.Get("remember"); remember != nil {
+		switch remember.(string) {
+		case "set":
+			l.setremembered(c)
+		case "clear":
+			l.clearremembered(c)
+		}
+		c.Session.Delete("remember")
+	}
+}
+
+func (l *LoginManager) loadremembered(c *flotilla.Ctx) {
+	if cookie, ok := c.ReadCookies()[l.env("COOKIE_NAME")]; ok {
+		c.Session.Set("user_id", cookie)
+		c.Session.Set("_fresh", false)
+		l.loaduser(cookie)
+	}
+}
+
+func (l *LoginManager) setremembered(c *flotilla.Ctx) {
+	cookiename := l.env("COOKIE_NAME")
+	cookievalue := c.Session.Get("user_id").(string)
+	cookieduration := cookieseconds(l.env("COOKIE_DURATION"))
+	cookiepath := l.env("COOKIE_PATH")
+	c.SecureCookie(cookiename, cookievalue, cookieduration, cookiepath)
+}
+
+func (l *LoginManager) clearremembered(c *flotilla.Ctx) {
+	cookiename := l.env("COOKIE_NAME")
+	cookievalue := ""
+	cookiepath := l.env("COOKIE_PATH")
+	c.SecureCookie(cookiename, cookievalue, 0, cookiepath)
+}
