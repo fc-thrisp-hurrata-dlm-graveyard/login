@@ -18,9 +18,16 @@ func (l *LoginManager) Configuration(conf ...Configuration) error {
 	return err
 }
 
-func UserLoader(f func(string) User) Configuration {
+func UserLoader(fn func(string) User) Configuration {
 	return func(l *LoginManager) error {
-		l.userloader = f
+		l.userloader = fn
+		return nil
+	}
+}
+
+func Handler(name string, h flotilla.HandlerFunc) Configuration {
+	return func(l *LoginManager) error {
+		l.Handlers[name] = h
 		return nil
 	}
 }
@@ -32,7 +39,7 @@ func Unauthorized(h flotilla.HandlerFunc) Configuration {
 	}
 }
 
-func Env(items ...string) Configuration {
+func Settings(items ...string) Configuration {
 	return func(l *LoginManager) error {
 		for _, item := range items {
 			i := strings.Split(item, ":")
