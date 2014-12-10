@@ -18,7 +18,3 @@ func cookieseconds(d string) int {
 	}
 	return int((time.Duration(base*24) * time.Hour) / time.Second)
 }
-
-func createidentifier(message string) string {
-	return ""
-}

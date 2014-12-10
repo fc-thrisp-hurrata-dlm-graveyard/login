@@ -46,7 +46,7 @@ func PerformRequest(r http.Handler, method, path string) *httptest.ResponseRecor
 	return w
 }
 
-func basemanager(c ...Configuration) *LoginManager {
+func basemanager(c ...Configuration) *Manager {
 	c = append(c, UserLoader(InMemoryUserLoader))
 	l := New(c...)
 	return l
@@ -55,13 +55,13 @@ func basemanager(c ...Configuration) *LoginManager {
 func testhandler(c *flotilla.Ctx) {
 	//passed := true
 	//l, _ := c.Call("loginmanager", c)
-	//m := l.(*LoginManager)
+	//m := l.(*Manager)
 	//uid := m.currentuserid()
 	//cu := m.CurrentUser()
 	//fmt.Printf("%+v %+v\n", uid, cu)
 }
 
-func testapp(name string, m *LoginManager) *flotilla.App {
+func testapp(name string, m *Manager) *flotilla.App {
 	f := flotilla.New(name)
 	m.Init(f)
 	f.Configure(f.Configuration...)
@@ -73,7 +73,7 @@ func TestExtension(t *testing.T) {
 	f := testapp("test-extension", basemanager())
 	f.GET("/test", func(c *flotilla.Ctx) {
 		l, _ := c.Call("loginmanager", c)
-		if _, ok := l.(*LoginManager); ok {
+		if _, ok := l.(*Manager); ok {
 			exists = true
 		}
 		c.ServeData(200, []byte("success"))
@@ -108,7 +108,7 @@ func TestLogin(t *testing.T) {
 	f := testapp("test-login", basemanager())
 	f.POST("/login", func(c *flotilla.Ctx) {
 		l, _ := c.Call("loginmanager", c)
-		m := l.(*LoginManager)
+		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, true, true)
 		if id := m.CurrentUser().GetId(); id == u.username {
@@ -127,7 +127,7 @@ func TestLogout(t *testing.T) {
 	f := testapp("test-logout", basemanager())
 	f.POST("/logout", func(c *flotilla.Ctx) {
 		l, _ := c.Call("loginmanager", c)
-		m := l.(*LoginManager)
+		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, false, false)
 		m.LogoutUser()
@@ -148,7 +148,7 @@ func TestRefresh(t *testing.T) {
 	f := testapp("test-refresh", basemanager())
 	f.GET("/refresh", func(c *flotilla.Ctx) {
 		l, _ := c.Call("loginmanager", c)
-		m := l.(*LoginManager)
+		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, false, true)
 		refreshed = c.Session.Get("_fresh").(bool)
@@ -167,7 +167,7 @@ func TestRemembered(t *testing.T) {
 	f := testapp("test-remember", basemanager())
 	f.GET("/remembered", func(c *flotilla.Ctx) {
 		l, _ := c.Call("loginmanager", c)
-		m := l.(*LoginManager)
+		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, true, true)
 		c.ServeData(200, []byte("success"))

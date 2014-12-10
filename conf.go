@@ -7,10 +7,10 @@ import (
 )
 
 type (
-	Configuration func(*LoginManager) error
+	Configuration func(*Manager) error
 )
 
-func (l *LoginManager) Configuration(conf ...Configuration) error {
+func (l *Manager) Configuration(conf ...Configuration) error {
 	var err error
 	for _, c := range conf {
 		err = c(l)
@@ -19,32 +19,32 @@ func (l *LoginManager) Configuration(conf ...Configuration) error {
 }
 
 func UserLoader(fn func(string) User) Configuration {
-	return func(l *LoginManager) error {
+	return func(l *Manager) error {
 		l.userloader = fn
 		return nil
 	}
 }
 
 func Handler(name string, h flotilla.HandlerFunc) Configuration {
-	return func(l *LoginManager) error {
+	return func(l *Manager) error {
 		l.Handlers[name] = h
 		return nil
 	}
 }
 
 func Unauthorized(h flotilla.HandlerFunc) Configuration {
-	return func(l *LoginManager) error {
+	return func(l *Manager) error {
 		l.Handlers["unauthorized"] = h
 		return nil
 	}
 }
 
 func Settings(items ...string) Configuration {
-	return func(l *LoginManager) error {
+	return func(l *Manager) error {
 		for _, item := range items {
 			i := strings.Split(item, ":")
 			key, value := i[0], i[1]
-			l.Env[strings.ToUpper(key)] = value
+			l.Settings[strings.ToUpper(key)] = value
 		}
 		return nil
 	}

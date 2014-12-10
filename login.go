@@ -11,11 +11,11 @@ import (
 type (
 	handlers map[string]flotilla.HandlerFunc
 
-	LoginManager struct {
+	Manager struct {
 		s          session.SessionStore
 		userloader func(string) User
 		App        *flotilla.App
-		Env        map[string]string
+		Settings   map[string]string
 		Handlers   map[string]flotilla.HandlerFunc
 	}
 )
@@ -31,138 +31,140 @@ var (
 	}
 )
 
-func New(c ...Configuration) *LoginManager {
-	l := &LoginManager{Env: defaultsettings,
+func New(c ...Configuration) *Manager {
+	m := &Manager{Settings: defaultsettings,
 		Handlers: make(handlers)}
-	c = append(c, Handler("cookie", l.Getremembered))
-	err := l.Configuration(c...)
+	c = append(c, Handler("cookie", m.GetRemembered))
+	err := m.Configuration(c...)
 	if err != nil {
 		panic(fmt.Sprintf("[FLOTILLA-LOGIN] configuration error: %s", err))
 	}
-	return l
+	return m
 }
 
-func loginctxfuncs(l *LoginManager) map[string]interface{} {
+func loginctxfuncs(m *Manager) map[string]interface{} {
 	ret := make(map[string]interface{})
-	ret["loginmanager"] = func(c *flotilla.Ctx) *LoginManager { l.Reload(c); return l }
+	ret["loginmanager"] = func(c *flotilla.Ctx) *Manager { m.Reload(c); return m }
 	ret["currentuser"] = func(c *flotilla.Ctx) User { return currentuser(c) }
 	return ret
 }
 
-func (l *LoginManager) Init(app *flotilla.App) {
-	l.App = app
+func (m *Manager) Init(app *flotilla.App) {
+	m.App = app
 	app.Configuration = append(app.Configuration,
-		flotilla.CtxFuncs(loginctxfuncs(l)),
+		flotilla.CtxFuncs(loginctxfuncs(m)),
 		flotilla.CtxProcessor("CurrentUser", currentuser))
-	app.Use(l.Updateremembered)
+	app.Use(m.UpdateRemembered)
 }
 
-func (l *LoginManager) reloaders() []flotilla.HandlerFunc {
+func (m *Manager) reloaders() []flotilla.HandlerFunc {
 	ret := []flotilla.HandlerFunc{}
 	for _, rl := range []string{"cookie", "request", "token", "header"} {
-		if h, ok := l.Handlers[rl]; ok {
+		if h, ok := m.Handlers[rl]; ok {
 			ret = append(ret, h)
 		}
 	}
 	return ret
 }
 
-func (l *LoginManager) Reload(c *flotilla.Ctx) {
-	l.s = c.Session
-	if uid := l.s.Get("user_id"); uid != nil {
-		for _, fn := range l.reloaders() {
+func (m *Manager) Reload(c *flotilla.Ctx) {
+	m.s = c.Session
+	if uid := m.s.Get("user_id"); uid != nil {
+		for _, fn := range m.reloaders() {
 			fn(c)
 		}
 	}
 }
 
-func (l *LoginManager) Setting(key string) string {
-	if item, ok := l.App.Env.Store[storekey(key)]; ok {
+func (m *Manager) Setting(key string) string {
+	if item, ok := m.App.Env.Store[storekey(key)]; ok {
 		return item.Value
 	}
-	if item, ok := l.Env[strings.ToUpper(key)]; ok {
+	if item, ok := m.Settings[strings.ToUpper(key)]; ok {
 		return item
 	}
 	return ""
 }
 
-func (l *LoginManager) currentuserid() string {
-	if uid := l.s.Get("user_id"); uid != nil {
+func (m *Manager) currentuserid() string {
+	if uid := m.s.Get("user_id"); uid != nil {
 		return uid.(string)
 	}
 	return ""
 }
 
 func currentuser(c *flotilla.Ctx) User {
-	l, _ := c.Call("loginmanager", c)
-	m := l.(*LoginManager)
-	return m.CurrentUser()
+	return manager(c).CurrentUser()
 }
 
-func (l *LoginManager) CurrentUser() User {
-	if usr := l.s.Get("user"); usr == nil {
-		l.reloaduser()
+func (m *Manager) CurrentUser() User {
+	if usr := m.s.Get("user"); usr == nil {
+		m.reloaduser()
 	}
-	user := l.s.Get("user")
+	user := m.s.Get("user")
 	return user.(User)
 }
 
-func (l *LoginManager) LoginUser(user User, remember bool, fresh bool) bool {
+func (m *Manager) LoginUser(user User, remember bool, fresh bool) bool {
 	if !user.IsActive() {
 		return false
 	}
-	l.s.Set("user_id", user.GetId())
-	l.s.Set("_fresh", fresh)
-	l.s.Set("user", user)
+	m.s.Set("user_id", user.GetId())
+	m.s.Set("_fresh", fresh)
+	m.s.Set("user", user)
 	if remember {
-		l.s.Set("remember", "set")
+		m.s.Set("remember", "set")
 	}
 	return true
 }
 
-func (l *LoginManager) LogoutUser() bool {
-	l.s.Delete("user")
-	l.s.Delete("user_id")
-	l.s.Set("remember", "clear")
-	l.reloaduser()
+func (m *Manager) LogoutUser() bool {
+	m.s.Delete("user")
+	m.s.Delete("user_id")
+	m.s.Set("remember", "clear")
+	m.reloaduser()
 	return true
 }
 
-func (l *LoginManager) UserLoader(userid string) User {
-	if u := l.userloader; u != nil {
+func (m *Manager) UserLoader(userid string) User {
+	if u := m.userloader; u != nil {
 		return u(userid)
 	}
 	return &AnonymousUser{}
 }
 
-func (l *LoginManager) reloaduser() {
-	l.loaduser(l.currentuserid())
+func (m *Manager) reloaduser() {
+	m.loaduser(m.currentuserid())
 }
 
-func (l *LoginManager) loaduser(userid string) {
-	l.s.Set("user", l.UserLoader(userid))
+func (m *Manager) loaduser(userid string) {
+	m.s.Set("user", m.UserLoader(userid))
 }
 
-func (l *LoginManager) Unauthorized(c *flotilla.Ctx) {
-	c.Flash(l.Setting("message_category"), l.Setting("unauthorized_message"))
-	if h := l.Handlers["unauthorized"]; h != nil {
+func (m *Manager) Unauthenticated(c *flotilla.Ctx) {
+	c.Flash(m.Setting("message_category"), m.Setting("unauthenticated_message"))
+	if h := m.Handlers["unauthenticated"]; h != nil {
 		h(c)
 	}
-	if loginurl := l.Setting("login_url"); loginurl != "" {
+	if loginurl := m.Setting("login_url"); loginurl != "" {
 		c.Redirect(303, loginurl)
 	} else {
 		c.Status(401)
 	}
 }
 
+func manager(c *flotilla.Ctx) *Manager {
+	m, _ := c.Call("loginmanager", c)
+	return m.(*Manager)
+}
+
 // RequireLogin is a flotilla HandlerFunc that checks for authorized user,
-// aborting with 401 if unauthorized.
+// aborting with 401 if unauthenticated.
 func RequireLogin(c *flotilla.Ctx) {
-	l, _ := c.Call("loginmanager", c)
-	m := l.(*LoginManager)
+	m := manager(c)
 	currentuser := m.CurrentUser()
 	if !currentuser.IsAuthenticated() {
-		m.Unauthorized(c)
+		m.Unauthenticated(c)
 	}
 }
 
@@ -170,29 +172,28 @@ func RequireLogin(c *flotilla.Ctx) {
 // user is logged in and authenticated before calling the handlerfunc.
 func LoginRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
 	return func(c *flotilla.Ctx) {
-		l, _ := c.Call("loginmanager", c)
-		m := l.(*LoginManager)
+		m := manager(c)
 		if m.CurrentUser().IsAuthenticated() {
 			h(c)
 		} else {
-			m.Unauthorized(c)
+			m.Unauthenticated(c)
 		}
 	}
 }
 
-func (l *LoginManager) NeedsRefresh() bool {
-	if fresh := l.s.Get("_fresh"); fresh != nil {
+func (m *Manager) NeedsRefresh() bool {
+	if fresh := m.s.Get("_fresh"); fresh != nil {
 		return !fresh.(bool)
 	}
 	return true
 }
 
-func (l *LoginManager) Refresh(c *flotilla.Ctx) {
-	if h := l.Handlers["refresh"]; h != nil {
+func (m *Manager) Refresh(c *flotilla.Ctx) {
+	if h := m.Handlers["refresh"]; h != nil {
 		h(c)
 	} else {
-		c.Flash(l.Setting("message_category"), l.Setting("refresh_message"))
-		if refreshurl := l.Setting("refresh_url"); refreshurl != "" {
+		c.Flash(m.Setting("message_category"), m.Setting("refresh_message"))
+		if refreshurl := m.Setting("refresh_url"); refreshurl != "" {
 			c.Redirect(303, refreshurl)
 		} else {
 			c.Status(403)
@@ -202,8 +203,7 @@ func (l *LoginManager) Refresh(c *flotilla.Ctx) {
 
 func RefreshRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
 	return func(c *flotilla.Ctx) {
-		l, _ := c.Call("loginmanager", c)
-		m := l.(*LoginManager)
+		m := manager(c)
 		if m.NeedsRefresh() {
 			m.Refresh(c)
 		} else {
@@ -212,38 +212,36 @@ func RefreshRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
 	}
 }
 
-func (l *LoginManager) Setremembered(c *flotilla.Ctx) {
-	cookiename := l.Setting("COOKIE_NAME")
-	cookievalue := c.Session.Get("user_id").(string)
-	cookieduration := cookieseconds(l.Setting("COOKIE_DURATION"))
-	cookiepath := l.Setting("COOKIE_PATH")
-	c.SecureCookie(cookiename, cookievalue, cookieduration, cookiepath)
+func (m *Manager) SetRemembered(c *flotilla.Ctx) {
+	name := m.Setting("COOKIE_NAME")
+	value := c.Session.Get("user_id").(string)
+	duration := cookieseconds(m.Setting("COOKIE_DURATION"))
+	path := m.Setting("COOKIE_PATH")
+	c.SecureCookie(name, value, duration, path)
 }
 
-func (l *LoginManager) Getremembered(c *flotilla.Ctx) {
-	if cookie, ok := c.ReadCookies()[l.Setting("COOKIE_NAME")]; ok {
+func (m *Manager) GetRemembered(c *flotilla.Ctx) {
+	if cookie, ok := c.ReadCookies()[m.Setting("COOKIE_NAME")]; ok {
 		c.Session.Set("user_id", cookie)
 		c.Session.Set("_fresh", false)
-		l.reloaduser()
+		m.reloaduser()
 	}
 }
 
-func (l *LoginManager) Updateremembered(c *flotilla.Ctx) {
+func (m *Manager) UpdateRemembered(c *flotilla.Ctx) {
 	c.Next()
 	if remember := c.Session.Get("remember"); remember != nil {
 		switch remember.(string) {
 		case "set":
-			l.Setremembered(c)
+			m.SetRemembered(c)
 		case "clear":
-			l.Clearremembered(c)
+			m.ClearRemembered(c)
 		}
 		c.Session.Delete("remember")
 	}
 }
 
-func (l *LoginManager) Clearremembered(c *flotilla.Ctx) {
-	cookiename := l.Setting("COOKIE_NAME")
-	cookievalue := ""
-	cookiepath := l.Setting("COOKIE_PATH")
-	c.SecureCookie(cookiename, cookievalue, 0, cookiepath)
+func (m *Manager) ClearRemembered(c *flotilla.Ctx) {
+	name, value, path := m.Setting("COOKIE_NAME"), "", m.Setting("COOKIE_PATH")
+	c.SecureCookie(name, value, 0, path)
 }
