@@ -62,7 +62,7 @@ func testhandler(c *flotilla.Ctx) {
 }
 
 func testapp(name string, m *Manager) *flotilla.App {
-	f := flotilla.New(name)
+	f := flotilla.New(name, flotilla.DefaultEngine)
 	m.Init(f)
 	f.Configure(f.Configuration...)
 	return f
@@ -76,7 +76,7 @@ func TestExtension(t *testing.T) {
 		if _, ok := l.(*Manager); ok {
 			exists = true
 		}
-		c.ServeData(200, []byte("success"))
+		c.ServePlain(200, []byte("success"))
 	})
 	PerformRequest(f, "GET", "/test")
 	if !exists {
@@ -89,7 +89,7 @@ func TestLoginRequired(t *testing.T) {
 	f.GET("/loginrequired", LoginRequired(testhandler))
 	r := PerformRequest(f, "GET", "/loginrequired")
 	if r.Code != http.StatusUnauthorized {
-		t.Errorf("Status code should be %v, was %d", http.StatusUnauthorized, r.Code)
+		t.Errorf("LoginRequired: status code should be %v, was %d", http.StatusUnauthorized, r.Code)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestLogin(t *testing.T) {
 		if id := m.CurrentUser().GetId(); id == u.username {
 			loggedin = true
 		}
-		c.ServeData(200, []byte("success"))
+		c.ServePlain(200, []byte("success"))
 	})
 	PerformRequest(f, "POST", "/login")
 	if !loggedin {
@@ -134,7 +134,7 @@ func TestLogout(t *testing.T) {
 		if id := m.CurrentUser().GetId(); id == u.username {
 			loggedin = true
 		}
-		c.ServeData(200, []byte("success"))
+		c.ServePlain(200, []byte("success"))
 	})
 	PerformRequest(f, "POST", "/logout")
 	if loggedin {
@@ -142,7 +142,6 @@ func TestLogout(t *testing.T) {
 	}
 }
 
-/*
 func TestRefresh(t *testing.T) {
 	refreshed := false
 	f := testapp("test-refresh", basemanager())
@@ -152,7 +151,7 @@ func TestRefresh(t *testing.T) {
 		u := tusers["one"]
 		m.LoginUser(u, false, true)
 		refreshed = c.Session.Get("_fresh").(bool)
-		c.ServeData(200, []byte("success"))
+		c.ServePlain(200, []byte("success"))
 	})
 	PerformRequest(f, "GET", "/refresh")
 	if !refreshed {
@@ -160,23 +159,26 @@ func TestRefresh(t *testing.T) {
 	}
 }
 
-//func TestRefreshRequired() {}
+func TestRefreshRequired(t *testing.T) {
+	f := testapp("test-refresh", basemanager())
+	f.GET("/refreshrequired", RefreshRequired(func(c *flotilla.Ctx) {}))
+	r := PerformRequest(f, "GET", "/refreshrequired")
+	if r.Code != http.StatusForbidden {
+		t.Errorf("RefreshRequired: status code should be %v, was %d", http.StatusForbidden, r.Code)
+	}
+}
 
 func TestRemembered(t *testing.T) {
-	w := httptest.NewRecorder()
 	f := testapp("test-remember", basemanager())
 	f.GET("/remembered", func(c *flotilla.Ctx) {
 		l, _ := c.Call("loginmanager", c)
 		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, true, true)
-		c.ServeData(200, []byte("success"))
+		c.ServePlain(200, []byte("success"))
 	})
-	req, _ := http.NewRequest("GET", "/remembered", nil)
-	f.ServeHTTP(w, req)
-	for _, x := range w.Header()["Set-Cookie"] {
-		fmt.Printf("%s\n", x)
+	w := PerformRequest(f, "GET", "/remembered")
+	if w.HeaderMap["Set-Cookie"][0][:14] != "remember_token" {
+		t.Errorf("not remembered")
 	}
-	fmt.Printf("1: %+v\n\n", reflect.TypeOf(w.Header()["Set-Cookie"]))
 }
-*/
