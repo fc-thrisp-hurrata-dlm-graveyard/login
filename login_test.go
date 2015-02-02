@@ -62,7 +62,7 @@ func testhandler(c *flotilla.Ctx) {
 }
 
 func testapp(name string, m *Manager) *flotilla.App {
-	f := flotilla.New(name, flotilla.DefaultEngine)
+	f := flotilla.New(name)
 	m.Init(f)
 	f.Configure(f.Configuration...)
 	return f

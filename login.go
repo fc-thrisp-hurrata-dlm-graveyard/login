@@ -9,14 +9,14 @@ import (
 )
 
 type (
-	handlers map[string]flotilla.HandlerFunc
+	handlers map[string]flotilla.Manage
 
 	Manager struct {
 		s          session.SessionStore
 		userloader func(string) User
 		App        *flotilla.App
 		Settings   map[string]string
-		Handlers   map[string]flotilla.HandlerFunc
+		Handlers   map[string]flotilla.Manage
 	}
 )
 
@@ -52,13 +52,13 @@ func loginctxfuncs(m *Manager) map[string]interface{} {
 func (m *Manager) Init(app *flotilla.App) {
 	m.App = app
 	app.Configuration = append(app.Configuration,
-		flotilla.CtxFuncs(loginctxfuncs(m)),
+		flotilla.Extensions(loginctxfuncs(m)),
 		flotilla.CtxProcessor("CurrentUser", currentuser))
 	app.Use(m.UpdateRemembered)
 }
 
-func (m *Manager) reloaders() []flotilla.HandlerFunc {
-	ret := []flotilla.HandlerFunc{}
+func (m *Manager) reloaders() []flotilla.Manage {
+	ret := []flotilla.Manage{}
 	for _, rl := range []string{"cookie", "request", "token", "header"} {
 		if h, ok := m.Handlers[rl]; ok {
 			ret = append(ret, h)
@@ -170,7 +170,7 @@ func RequireLogin(c *flotilla.Ctx) {
 
 // LoginRequired wraps a flotilla HandlerFunc to ensure that the current
 // user is logged in and authenticated before calling the handlerfunc.
-func LoginRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
+func LoginRequired(h flotilla.Manage) flotilla.Manage {
 	return func(c *flotilla.Ctx) {
 		m := manager(c)
 		if m.CurrentUser().IsAuthenticated() {
@@ -201,7 +201,7 @@ func (m *Manager) Refresh(c *flotilla.Ctx) {
 	}
 }
 
-func RefreshRequired(h flotilla.HandlerFunc) flotilla.HandlerFunc {
+func RefreshRequired(h flotilla.Manage) flotilla.Manage {
 	return func(c *flotilla.Ctx) {
 		m := manager(c)
 		if m.NeedsRefresh() {

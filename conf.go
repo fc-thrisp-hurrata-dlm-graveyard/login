@@ -25,14 +25,14 @@ func UserLoader(fn func(string) User) Configuration {
 	}
 }
 
-func Handler(name string, h flotilla.HandlerFunc) Configuration {
+func Handler(name string, h flotilla.Manage) Configuration {
 	return func(l *Manager) error {
 		l.Handlers[name] = h
 		return nil
 	}
 }
 
-func Unauthorized(h flotilla.HandlerFunc) Configuration {
+func Unauthorized(h flotilla.Manage) Configuration {
 	return func(l *Manager) error {
 		l.Handlers["unauthorized"] = h
 		return nil
