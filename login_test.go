@@ -52,13 +52,8 @@ func basemanager(c ...Configuration) *Manager {
 	return l
 }
 
-func testhandler(c *flotilla.Ctx) {
-	//passed := true
-	//l, _ := c.Call("loginmanager", c)
-	//m := l.(*Manager)
-	//uid := m.currentuserid()
-	//cu := m.CurrentUser()
-	//fmt.Printf("%+v %+v\n", uid, cu)
+func testhandler(c flotilla.Ctx) {
+	c.Call("serveplain", 200, []byte("success"))
 }
 
 func testapp(name string, m *Manager) *flotilla.App {
@@ -71,12 +66,12 @@ func testapp(name string, m *Manager) *flotilla.App {
 func TestExtension(t *testing.T) {
 	exists := false
 	f := testapp("test-extension", basemanager())
-	f.GET("/test", func(c *flotilla.Ctx) {
-		l, _ := c.Call("loginmanager", c)
+	f.GET("/test", func(c flotilla.Ctx) {
+		l, _ := c.Call("loginmanager")
 		if _, ok := l.(*Manager); ok {
 			exists = true
 		}
-		c.ServePlain(200, []byte("success"))
+		c.Call("serveplain", 200, []byte("success"))
 	})
 	PerformRequest(f, "GET", "/test")
 	if !exists {
@@ -106,15 +101,15 @@ func TestRequireLogin(t *testing.T) {
 func TestLogin(t *testing.T) {
 	loggedin := false
 	f := testapp("test-login", basemanager())
-	f.POST("/login", func(c *flotilla.Ctx) {
-		l, _ := c.Call("loginmanager", c)
+	f.POST("/login", func(c flotilla.Ctx) {
+		l, _ := c.Call("loginmanager")
 		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, true, true)
 		if id := m.CurrentUser().GetId(); id == u.username {
 			loggedin = true
 		}
-		c.ServePlain(200, []byte("success"))
+		c.Call("serveplain", 200, []byte("success"))
 	})
 	PerformRequest(f, "POST", "/login")
 	if !loggedin {
@@ -125,8 +120,8 @@ func TestLogin(t *testing.T) {
 func TestLogout(t *testing.T) {
 	loggedin := false
 	f := testapp("test-logout", basemanager())
-	f.POST("/logout", func(c *flotilla.Ctx) {
-		l, _ := c.Call("loginmanager", c)
+	f.POST("/logout", func(c flotilla.Ctx) {
+		l, _ := c.Call("loginmanager")
 		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, false, false)
@@ -134,7 +129,7 @@ func TestLogout(t *testing.T) {
 		if id := m.CurrentUser().GetId(); id == u.username {
 			loggedin = true
 		}
-		c.ServePlain(200, []byte("success"))
+		c.Call("serveplain", 200, []byte("success"))
 	})
 	PerformRequest(f, "POST", "/logout")
 	if loggedin {
@@ -145,13 +140,14 @@ func TestLogout(t *testing.T) {
 func TestRefresh(t *testing.T) {
 	refreshed := false
 	f := testapp("test-refresh", basemanager())
-	f.GET("/refresh", func(c *flotilla.Ctx) {
-		l, _ := c.Call("loginmanager", c)
+	f.GET("/refresh", func(c flotilla.Ctx) {
+		l, _ := c.Call("loginmanager")
 		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, false, true)
-		refreshed = c.Session.Get("_fresh").(bool)
-		c.ServePlain(200, []byte("success"))
+		rfrshd, _ := c.Call("getsession", "_fresh")
+		refreshed = rfrshd.(bool)
+		c.Call("serveplain", 200, []byte("success"))
 	})
 	PerformRequest(f, "GET", "/refresh")
 	if !refreshed {
@@ -161,7 +157,7 @@ func TestRefresh(t *testing.T) {
 
 func TestRefreshRequired(t *testing.T) {
 	f := testapp("test-refresh", basemanager())
-	f.GET("/refreshrequired", RefreshRequired(func(c *flotilla.Ctx) {}))
+	f.GET("/refreshrequired", RefreshRequired(func(c flotilla.Ctx) {}))
 	r := PerformRequest(f, "GET", "/refreshrequired")
 	if r.Code != http.StatusForbidden {
 		t.Errorf("RefreshRequired: status code should be %v, was %d", http.StatusForbidden, r.Code)
@@ -170,12 +166,12 @@ func TestRefreshRequired(t *testing.T) {
 
 func TestRemembered(t *testing.T) {
 	f := testapp("test-remember", basemanager())
-	f.GET("/remembered", func(c *flotilla.Ctx) {
-		l, _ := c.Call("loginmanager", c)
+	f.GET("/remembered", func(c flotilla.Ctx) {
+		l, _ := c.Call("loginmanager")
 		m := l.(*Manager)
 		u := tusers["one"]
 		m.LoginUser(u, true, true)
-		c.ServePlain(200, []byte("success"))
+		c.Call("serveplain", 200, []byte("success"))
 	})
 	w := PerformRequest(f, "GET", "/remembered")
 	if w.HeaderMap["Set-Cookie"][0][:14] != "remember_token" {

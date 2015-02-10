@@ -44,8 +44,8 @@ func New(c ...Configuration) *Manager {
 
 func loginctxfuncs(m *Manager) map[string]interface{} {
 	ret := make(map[string]interface{})
-	ret["loginmanager"] = func(c *flotilla.Ctx) *Manager { m.Reload(c); return m }
-	ret["currentuser"] = func(c *flotilla.Ctx) User { return currentuser(c) }
+	ret["loginmanager"] = func(c flotilla.Ctx) *Manager { m.Reload(c); return m }
+	ret["currentuser"] = func(c flotilla.Ctx) User { return currentuser(c) }
 	return ret
 }
 
@@ -67,8 +67,8 @@ func (m *Manager) reloaders() []flotilla.Manage {
 	return ret
 }
 
-func (m *Manager) Reload(c *flotilla.Ctx) {
-	m.s = c.Session
+func (m *Manager) Reload(c flotilla.Ctx) {
+	m.s = flotillaSession(c) //c.Call("session") //Session
 	if uid := m.s.Get("user_id"); uid != nil {
 		for _, fn := range m.reloaders() {
 			fn(c)
@@ -93,7 +93,7 @@ func (m *Manager) currentuserid() string {
 	return ""
 }
 
-func currentuser(c *flotilla.Ctx) User {
+func currentuser(c flotilla.Ctx) User {
 	return manager(c).CurrentUser()
 }
 
@@ -141,26 +141,27 @@ func (m *Manager) loaduser(userid string) {
 	m.s.Set("user", m.UserLoader(userid))
 }
 
-func (m *Manager) Unauthenticated(c *flotilla.Ctx) {
-	c.Flash(m.Setting("message_category"), m.Setting("unauthenticated_message"))
+func (m *Manager) Unauthenticated(c flotilla.Ctx) {
+	//c.Flash(m.Setting("message_category"), m.Setting("unauthenticated_message"))
+	c.Call("flash", m.Setting("message_category"), m.Setting("unauthenticated_message"))
 	if h := m.Handlers["unauthenticated"]; h != nil {
 		h(c)
 	}
 	if loginurl := m.Setting("login_url"); loginurl != "" {
-		c.Redirect(303, loginurl)
+		c.Call("redirect", 303, loginurl) //c.Redirect(303, loginurl)
 	} else {
-		c.Status(401)
+		c.Call("status", 401) //c.Status(401)
 	}
 }
 
-func manager(c *flotilla.Ctx) *Manager {
-	m, _ := c.Call("loginmanager", c)
+func manager(c flotilla.Ctx) *Manager {
+	m, _ := c.Call("loginmanager")
 	return m.(*Manager)
 }
 
 // RequireLogin is a flotilla HandlerFunc that checks for authorized user,
 // aborting with 401 if unauthenticated.
-func RequireLogin(c *flotilla.Ctx) {
+func RequireLogin(c flotilla.Ctx) {
 	m := manager(c)
 	currentuser := m.CurrentUser()
 	if !currentuser.IsAuthenticated() {
@@ -171,7 +172,7 @@ func RequireLogin(c *flotilla.Ctx) {
 // LoginRequired wraps a flotilla HandlerFunc to ensure that the current
 // user is logged in and authenticated before calling the handlerfunc.
 func LoginRequired(h flotilla.Manage) flotilla.Manage {
-	return func(c *flotilla.Ctx) {
+	return func(c flotilla.Ctx) {
 		m := manager(c)
 		if m.CurrentUser().IsAuthenticated() {
 			h(c)
@@ -188,21 +189,21 @@ func (m *Manager) NeedsRefresh() bool {
 	return true
 }
 
-func (m *Manager) Refresh(c *flotilla.Ctx) {
+func (m *Manager) Refresh(c flotilla.Ctx) {
 	if h := m.Handlers["refresh"]; h != nil {
 		h(c)
 	} else {
-		c.Flash(m.Setting("message_category"), m.Setting("refresh_message"))
+		c.Call("flash", m.Setting("message_category"), m.Setting("refresh_message"))
 		if refreshurl := m.Setting("refresh_url"); refreshurl != "" {
-			c.Redirect(303, refreshurl)
+			c.Call("redirect", 303, refreshurl)
 		} else {
-			c.Status(403)
+			c.Call("status", 403)
 		}
 	}
 }
 
 func RefreshRequired(h flotilla.Manage) flotilla.Manage {
-	return func(c *flotilla.Ctx) {
+	return func(c flotilla.Ctx) {
 		m := manager(c)
 		if m.NeedsRefresh() {
 			m.Refresh(c)
@@ -212,36 +213,46 @@ func RefreshRequired(h flotilla.Manage) flotilla.Manage {
 	}
 }
 
-func (m *Manager) SetRemembered(c *flotilla.Ctx) {
+func (m *Manager) SetRemembered(c flotilla.Ctx) {
 	name := m.Setting("COOKIE_NAME")
-	value := c.Session.Get("user_id").(string)
+	value, _ := c.Call("getsession", "user_id")
 	duration := cookieseconds(m.Setting("COOKIE_DURATION"))
 	path := m.Setting("COOKIE_PATH")
-	c.SecureCookie(name, value, duration, path)
+	_, err := c.Call("securecookie", name, value.(string), duration, path)
 }
 
-func (m *Manager) GetRemembered(c *flotilla.Ctx) {
-	if cookie, ok := c.ReadCookies()[m.Setting("COOKIE_NAME")]; ok {
-		c.Session.Set("user_id", cookie)
-		c.Session.Set("_fresh", false)
+func readcookies(c flotilla.Ctx) map[string]string {
+	cks, _ := c.Call("readcookies")
+	return cks.(map[string]string)
+}
+
+func (m *Manager) GetRemembered(c flotilla.Ctx) {
+	if cookie, ok := readcookies(c)[m.Setting("COOKIE_NAME")]; ok {
+		c.Call("setsession", "user_id", cookie)
+		c.Call("setsession", "_fresh", false)
 		m.reloaduser()
 	}
 }
 
-func (m *Manager) UpdateRemembered(c *flotilla.Ctx) {
+func (m *Manager) UpdateRemembered(c flotilla.Ctx) {
 	c.Next()
-	if remember := c.Session.Get("remember"); remember != nil {
+	if remember, _ := c.Call("getsession", "remember"); remember != nil {
 		switch remember.(string) {
 		case "set":
 			m.SetRemembered(c)
 		case "clear":
 			m.ClearRemembered(c)
 		}
-		c.Session.Delete("remember")
+		c.Call("deletesession", "remember")
 	}
 }
 
-func (m *Manager) ClearRemembered(c *flotilla.Ctx) {
+func (m *Manager) ClearRemembered(c flotilla.Ctx) {
 	name, value, path := m.Setting("COOKIE_NAME"), "", m.Setting("COOKIE_PATH")
-	c.SecureCookie(name, value, 0, path)
+	c.Call("securecookie", name, value, 0, path)
+}
+
+func flotillaSession(c flotilla.Ctx) session.SessionStore {
+	s, _ := c.Call("session")
+	return s.(session.SessionStore)
 }
