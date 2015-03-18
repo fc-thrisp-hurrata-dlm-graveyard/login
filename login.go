@@ -3,6 +3,7 @@ package login
 import (
 	"fmt"
 	"strings"
+	"reflect"
 
 	"github.com/thrisp/flotilla"
 	"github.com/thrisp/flotilla/session"
@@ -42,17 +43,32 @@ func New(c ...Configuration) *Manager {
 	return m
 }
 
-func loginctxfuncs(m *Manager) map[string]interface{} {
-	ret := make(map[string]interface{})
-	ret["loginmanager"] = func(c flotilla.Ctx) *Manager { m.Reload(c); return m }
-	ret["currentuser"] = func(c flotilla.Ctx) User { return currentuser(c) }
-	return ret
+type loginfxtension struct {
+	name string
+	fns map[string]reflect.Value
+}
+
+func MakeLoginFxtension(m *Manager) flotilla.Fxtension {
+	lf := &loginfxtension{name: "fxlogin", fns: make(map[string]reflect.Value)}
+	lf.fns["loginmanager"] = reflect.ValueOf(func(c flotilla.Ctx) *Manager { m.Reload(c); return m })
+	lf.fns["currentuser"] = reflect.ValueOf(func(c flotilla.Ctx) User { return currentuser(c) })
+	return lf
+}
+
+func (l *loginfxtension) Name() string {
+	return l.name
+}
+
+func (l *loginfxtension) Set(rv map[string]reflect.Value) {
+	for k, v := range l.fns {
+		rv[k] = v
+	}
 }
 
 func (m *Manager) Init(app *flotilla.App) {
 	m.App = app
 	app.Configuration = append(app.Configuration,
-		flotilla.Extensions(loginctxfuncs(m)),
+		flotilla.Extensions(MakeLoginFxtension(m)),
 		flotilla.CtxProcessor("CurrentUser", currentuser))
 	app.Use(m.UpdateRemembered)
 }
@@ -218,7 +234,7 @@ func (m *Manager) SetRemembered(c flotilla.Ctx) {
 	value, _ := c.Call("getsession", "user_id")
 	duration := cookieseconds(m.Setting("COOKIE_DURATION"))
 	path := m.Setting("COOKIE_PATH")
-	_, err := c.Call("securecookie", name, value.(string), duration, path)
+	_, _ = c.Call("securecookie", name, value.(string), duration, path)
 }
 
 func readcookies(c flotilla.Ctx) map[string]string {
